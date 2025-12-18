@@ -1,10 +1,15 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -44,28 +49,49 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	}
 	defer file.Close()
-	mediaType := header.Header.Get("Content-Type")
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Missing Content-Type", err)
-		return 
 
-	}
-	imageData,err  := io.ReadAll(file)
+	conType := header.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(conType)
 	if err != nil{
-		respondWithError(w, http.StatusBadRequest, "Couldn't read", err)
+		respondWithError(w,  http.StatusBadRequest ,"Couldn't parse Media tpe", err)
 		return 
 	}
+	if (mediaType != "image/jpeg" && mediaType != "image/png"){
+		respondWithError(w,  http.StatusBadRequest ,"Not correct media type", err)
+		return
+	}
+	
 	videoData, err := cfg.db.GetVideo(videoID)
 	if err != nil{
 		respondWithError(w, http.StatusInternalServerError, "Couldn't get video", err)
 		return 
 	}
+	extension := strings.Split(mediaType, "/")
+	
+	
+	
+	key := make([]byte, 32)
+	rand.Read(key)
+	encode := base64.RawURLEncoding.EncodeToString(key)
+	joinedFilename := encode + "." +  extension[1]
+	joinedFile := filepath.Join(cfg.assetsRoot, joinedFilename)
+	
+	newFile,err := os.Create(joinedFile)
+	if err != nil{
+		respondWithError(w, http.StatusInternalServerError, "Cant create file", err)
+		return 
+	}
+	defer newFile.Close()
 
-	encodedStr := base64.StdEncoding.EncodeToString(imageData)
-	dataURL := fmt.Sprintf("data:%v;base64,%v", mediaType, encodedStr)
-	videoData.ThumbnailURL = &dataURL
+	_, err2 := io.Copy(newFile, file )
+	if err2 != nil{
+		respondWithError(w, http.StatusInternalServerError, "Cant copy file", err2)
+		return 
+	}
+	fullPath:= fmt.Sprintf("http://localhost:%s/assets/%s",cfg.port, joinedFilename)
+	videoData.ThumbnailURL = &fullPath
 
-	cfg.db.UpdateVideo(videoData)
+	err = cfg.db.UpdateVideo(videoData)
 	if err != nil{
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return 
