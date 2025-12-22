@@ -115,26 +115,40 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	joinedFile := filepath.Join(directory, joinedFilename)
 	
+	processed, err := processVideoForFastStart(newFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Cannot process file", err)
+		return
+	}
+
+	processedFile,err := os.Open(processed)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Cannot process file", err)
+		return
+	}
+	defer processedFile.Close()
 
 
 	_,err=cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket: aws.String(cfg.s3Bucket),
 		Key: 	aws.String(joinedFile),
-		Body:	newFile, 
+		Body:	processedFile, 
 		ContentType: aws.String(mediaType),
 	})
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error uploading file to S3", err)
 		return
 	}
-	fullPath:= fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s",cfg.s3Bucket, cfg.s3Region,joinedFile )
+	fullPath:= fmt.Sprintf("https://%s/%s",cfg.s3CfDistribution, joinedFile)
 	videoData.VideoURL = &fullPath
-
+	
 	err = cfg.db.UpdateVideo(videoData)
 	if err != nil{
 		respondWithError(w, http.StatusInternalServerError, "Couldn't update video", err)
 		return 
 	}
+
+
 
 	respondWithJSON(w, http.StatusOK, videoData)
 }
@@ -173,3 +187,15 @@ func getVideoAspectRatio(filePath string) (string, error) {
 	}
 
 }
+
+func processVideoForFastStart (filePath string) (string,error){
+	outputPath := filePath + ".processing"
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", outputPath)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if err:= cmd.Run(); err != nil{
+		return "", err
+	}
+	return outputPath, nil
+}
+
